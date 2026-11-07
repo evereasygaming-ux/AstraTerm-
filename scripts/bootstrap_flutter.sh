@@ -37,17 +37,29 @@ fi
 # native/android/ directory into the generated Android runner. Runs on every
 # invocation so the copy is idempotent and never reverts a previous install.
 NATIVE_ANDROID_DIR="$ROOT/native/android"
+MAIN_ACTIVITY_SRC="$NATIVE_ANDROID_DIR/MainActivity.kt"
+TERMINAL_PLUGIN_SRC="$NATIVE_ANDROID_DIR/TerminalPlugin.kt"
+TARGET_KOTLIN_DIR="android/app/src/main/kotlin/com/astra/term"
+
 if [[ -d android/app/src/main/kotlin ]]; then
-  if [[ -d "$NATIVE_ANDROID_DIR" ]]; then
-    mkdir -p android/app/src/main/kotlin/com/astra/term
-    cp -f "$NATIVE_ANDROID_DIR/MainActivity.kt" android/app/src/main/kotlin/com/astra/term/MainActivity.kt
-    cp -f "$NATIVE_ANDROID_DIR/TerminalPlugin.kt" android/app/src/main/kotlin/com/astra/term/TerminalPlugin.kt
-    echo "Android shell engine (Phase 2.1) installed into the generated runner."
-  else
-    echo "Warning: native/android sources missing; shell engine not installed." >&2
+  # Both custom sources must exist; refuse to half-install otherwise.
+  if [[ ! -f "$MAIN_ACTIVITY_SRC" ]]; then
+    echo "Error: $MAIN_ACTIVITY_SRC is missing; cannot install the AstraTerm Android shell engine." >&2
+    echo "Expected tracked source under native/android/MainActivity.kt." >&2
+    exit 1
   fi
+  if [[ ! -f "$TERMINAL_PLUGIN_SRC" ]]; then
+    echo "Error: $TERMINAL_PLUGIN_SRC is missing; cannot install the AstraTerm Android shell engine." >&2
+    echo "Expected tracked source under native/android/TerminalPlugin.kt." >&2
+    exit 1
+  fi
+  mkdir -p "$TARGET_KOTLIN_DIR"
+  cp -f "$MAIN_ACTIVITY_SRC" "$TARGET_KOTLIN_DIR/MainActivity.kt"
+  cp -f "$TERMINAL_PLUGIN_SRC" "$TARGET_KOTLIN_DIR/TerminalPlugin.kt"
+  echo "Android shell engine (Phase 2.1) installed into the generated runner."
 else
-  echo "Warning: generated Android runner not found; shell engine not installed." >&2
+  echo "Error: generated Android runner not found (android/app/src/main/kotlin missing); shell engine not installed." >&2
+  exit 1
 fi
 
 if [[ -f ios/Runner/Info.plist ]]; then

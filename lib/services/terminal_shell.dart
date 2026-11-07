@@ -86,6 +86,18 @@ class TerminalShellService {
   bool _supported = false;
   bool _startInFlight = false;
 
+  /// Native session id returned by the most recent successful start. Stale
+  /// stream events tagged with another session are dropped so a restarted
+  /// session is never polluted by the previous one. `null` (legacy payloads
+  /// or after an explicit close) disables the filter except for exit events
+  /// while idle.
+  int? _session;
+
+  /// Set by an explicit [close] and cleared by the next [start]: after an
+  /// intentional shutdown no late event (data or exit) may reach the log or
+  /// the state machine until a fresh session starts.
+  bool _intentionallyClosed = false;
+
   bool get isSupported => _supported;
 
   bool get isConnected => state.value == TerminalEngineState.connected;
@@ -99,15 +111,13 @@ class TerminalShellService {
     // endOfStream and the old stream subscription is done for good.
     _subscribe();
     _startInFlight = true;
+    _intentionallyClosed = false;
     state.value = TerminalEngineState.starting;
     lastError.value = null;
     try {
       final result =
-          await TerminalChannels.method.invokeMethod<String>('start');
-      if (result == 'already_running') {
-        state.value = TerminalEngineState.connected;
-        return;
-      }
+          await TerminalChannels.method.invokeMethod<dynamic>('start');
+      _session = _sessionFromResult(result);
       state.value = TerminalEngineState.connected;
     } on PlatformException catch (error) {
       state.value = TerminalEngineState.error;
@@ -117,13 +127,24 @@ class TerminalShellService {
             mergeable: false),
       );
     } on MissingPluginException {
-      state.value = TerminalEngineState.error;
+      state.value = TerminalEngineState.unsupported;
       lastError.value = 'Terminal engine is unavailable on this device.';
       _append(const OutputEntry('* terminal engine is unavailable.',
           mergeable: false));
     } finally {
       _startInFlight = false;
     }
+  }
+
+  /// Extracts the native session id from a start result. Accepts the current
+  /// map payload `{"status": ..., "session": <int>}` and any legacy payloads.
+  static int? _sessionFromResult(Object? result) {
+    if (result is Map) {
+      final session = result['session'];
+      if (session is num) return session.toInt();
+      return null;
+    }
+    return null;
   }
 
   /// Submits a command to the shell. The command is echoed into the log; if
@@ -149,17 +170,32 @@ class TerminalShellService {
         OutputEntry('* write error: ${error.message ?? error.code}',
             mergeable: false),
       );
+    } on MissingPluginException {
+      state.value = TerminalEngineState.unsupported;
+      lastError.value = 'Terminal engine is unavailable on this device.';
+      _append(const OutputEntry('* terminal engine is unavailable.',
+          mergeable: false));
     }
   }
 
   /// Requests the native side to terminate the current shell session.
+  ///
+  /// Always ends in [TerminalEngineState.idle]: the native side suppresses
+  /// the natural-exit event for intentional shutdowns, and any delayed exit
+  /// notification is ignored while idle.
   Future<void> close() async {
     if (!_supported) return;
     try {
       await TerminalChannels.method.invokeMethod<String>('close');
     } on PlatformException {
       // The session may already be gone; that is an acceptable outcome.
+    } on MissingPluginException {
+      // No native engine present; still fall back to an idle service.
     }
+    // Invalidate the session before entering idle so any late tagged event
+    // is routed by the stale-session filter as well.
+    _session = null;
+    _intentionallyClosed = true;
     state.value = TerminalEngineState.idle;
   }
 
@@ -187,11 +223,27 @@ class TerminalShellService {
   }
 
   void _handleEvent(Object? event) {
+    // After an explicit close no late event from the closed session is
+    // accepted, whatever payload it carries.
+    if (_intentionallyClosed) {
+      return;
+    }
     if (event is Map) {
+      final typedSession = event['session'];
+      final session = typedSession is num ? typedSession.toInt() : null;
+      if (session != null && _session != null && session != _session) {
+        // Event belongs to a retired session; ignore it entirely.
+        return;
+      }
       switch (event['type']) {
         case 'data':
           _append(OutputEntry(event['data']?.toString() ?? ''));
         case 'exit':
+          // Explicit close already left the session intentionally in idle;
+          // a delayed natural-exit notification must not overwrite it.
+          if (state.value == TerminalEngineState.idle) {
+            return;
+          }
           final code = event['code'];
           _append(OutputEntry('* shell exited (exit code $code).',
               mergeable: false));

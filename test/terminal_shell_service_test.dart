@@ -49,7 +49,7 @@ void main() {
     final methodCalls = <MethodCall>[];
     messenger.setMockMethodCallHandler(TerminalChannels.method, (call) async {
       methodCalls.add(call);
-      return 'started';
+      return {'status': 'started', 'session': 1};
     });
     messenger.setMockStreamHandler(
         TerminalChannels.output, _SilentStreamHandler());
@@ -88,19 +88,36 @@ void main() {
     await service.dispose();
   });
 
+  test('MissingPluginException from start degrades to unsupported', () async {
+    messenger.setMockMethodCallHandler(TerminalChannels.method, (call) async {
+      throw MissingPluginException();
+    });
+    messenger.setMockStreamHandler(
+        TerminalChannels.output, _SilentStreamHandler());
+
+    final service = TerminalShellService();
+    await service.start();
+
+    expect(service.state.value, TerminalEngineState.unsupported);
+    expect(service.lastError.value,
+        'Terminal engine is unavailable on this device.');
+
+    await service.dispose();
+  });
+
   test('output events append to the log and exit events end the session',
       () async {
-    messenger.setMockMethodCallHandler(
-        TerminalChannels.method, (call) async => 'started');
+    messenger.setMockMethodCallHandler(TerminalChannels.method,
+        (call) async => {'status': 'started', 'session': 1});
     final handler = _RecordingStreamHandler();
     messenger.setMockStreamHandler(TerminalChannels.output, handler);
 
     final service = TerminalShellService();
     await service.start();
 
-    handler.emitData({'type': 'data', 'data': 'hello\n'});
-    handler.emitData({'type': 'data', 'data': 'second line\n'});
-    handler.emitData({'type': 'exit', 'code': 0});
+    handler.emitData({'type': 'data', 'session': 1, 'data': 'hello\n'});
+    handler.emitData({'type': 'data', 'session': 1, 'data': 'second line\n'});
+    handler.emitData({'type': 'exit', 'session': 1, 'code': 0});
     await pumpEventQueue();
 
     final entries = service.entries.value;
@@ -109,6 +126,25 @@ void main() {
     expect(entries[0].text, 'hello\nsecond line\n');
     expect(entries[1].text, '* shell exited (exit code 0).');
     expect(service.state.value, TerminalEngineState.exited);
+
+    await service.dispose();
+  });
+
+  test('events tagged with a stale session id are ignored', () async {
+    messenger.setMockMethodCallHandler(TerminalChannels.method,
+        (call) async => {'status': 'started', 'session': 2});
+    final handler = _RecordingStreamHandler();
+    messenger.setMockStreamHandler(TerminalChannels.output, handler);
+
+    final service = TerminalShellService();
+    await service.start();
+
+    handler.emitData({'type': 'data', 'session': 1, 'data': 'stale\n'});
+    handler.emitData({'type': 'exit', 'session': 1, 'code': 143});
+    await pumpEventQueue();
+
+    expect(service.entries.value, isEmpty);
+    expect(service.state.value, TerminalEngineState.connected);
 
     await service.dispose();
   });
@@ -139,7 +175,7 @@ void main() {
     final methodCalls = <MethodCall>[];
     messenger.setMockMethodCallHandler(TerminalChannels.method, (call) async {
       methodCalls.add(call);
-      return 'started';
+      return {'status': 'started', 'session': 1};
     });
     messenger.setMockStreamHandler(
         TerminalChannels.output, _SilentStreamHandler());
@@ -157,7 +193,7 @@ void main() {
 
   test('write failure surfaces a write error entry and error state', () async {
     messenger.setMockMethodCallHandler(TerminalChannels.method, (call) async {
-      if (call.method == 'start') return 'started';
+      if (call.method == 'start') return {'status': 'started', 'session': 1};
       throw PlatformException(code: 'write_failed', message: 'broken pipe');
     });
     messenger.setMockStreamHandler(
@@ -171,6 +207,28 @@ void main() {
     expect(
       service.entries.value.last.text,
       '* write error: broken pipe',
+    );
+
+    await service.dispose();
+  });
+
+  test('write with a missing native engine degrades to unsupported', () async {
+    messenger.setMockMethodCallHandler(TerminalChannels.method, (call) async {
+      if (call.method == 'start') return {'status': 'started', 'session': 1};
+      throw MissingPluginException();
+    });
+    messenger.setMockStreamHandler(
+        TerminalChannels.output, _SilentStreamHandler());
+
+    final service = TerminalShellService();
+    await service.start();
+    await service.write('echo hello');
+
+    expect(service.state.value, TerminalEngineState.unsupported);
+    expect(
+      service.entries.value
+          .any((e) => e.text == '* terminal engine is unavailable.'),
+      isTrue,
     );
 
     await service.dispose();
@@ -196,13 +254,99 @@ void main() {
     await service.dispose();
   });
 
+  test('a delayed natural-exit event cannot overwrite the closed idle state',
+      () async {
+    messenger.setMockMethodCallHandler(TerminalChannels.method, (call) async {
+      if (call.method == 'close') return 'closed';
+      return {'status': 'started', 'session': 1};
+    });
+    final handler = _RecordingStreamHandler();
+    messenger.setMockStreamHandler(TerminalChannels.output, handler);
+
+    final service = TerminalShellService();
+    await service.start();
+    await service.close();
+    expect(service.state.value, TerminalEngineState.idle);
+
+    // Simulates the native side reporting the process exit after the user's
+    // explicit close request has already been handled.
+    handler.emitData({'type': 'exit', 'session': 1, 'code': 0});
+    handler.emitData({'type': 'data', 'session': 1, 'data': 'trailing\n'});
+    await pumpEventQueue();
+
+    expect(service.state.value, TerminalEngineState.idle);
+    expect(service.entries.value, isEmpty);
+
+    await service.dispose();
+  });
+
+  test('close failures still leave the service in idle without throwing',
+      () async {
+    messenger.setMockMethodCallHandler(TerminalChannels.method, (call) async {
+      if (call.method == 'start') return {'status': 'started', 'session': 1};
+      throw PlatformException(code: 'shell_gone', message: 'already gone');
+    });
+    messenger.setMockStreamHandler(
+        TerminalChannels.output, _SilentStreamHandler());
+
+    final service = TerminalShellService();
+    await service.start();
+
+    await service.close();
+    expect(service.state.value, TerminalEngineState.idle);
+
+    await service.dispose();
+  });
+
+  test('close with a missing native engine still reaches idle', () async {
+    messenger.setMockMethodCallHandler(TerminalChannels.method, (call) async {
+      if (call.method == 'start') return {'status': 'started', 'session': 1};
+      throw MissingPluginException();
+    });
+    messenger.setMockStreamHandler(
+        TerminalChannels.output, _SilentStreamHandler());
+
+    final service = TerminalShellService();
+    await service.start();
+
+    await service.close();
+    expect(service.state.value, TerminalEngineState.idle);
+
+    await service.dispose();
+  });
+
+  test('restart closes first and starts afterwards, reusing connected state',
+      () async {
+    final methodCalls = <MethodCall>[];
+    messenger.setMockMethodCallHandler(TerminalChannels.method, (call) async {
+      methodCalls.add(call);
+      if (call.method == 'close') return 'closed';
+      return {'status': 'started', 'session': 2};
+    });
+    messenger.setMockStreamHandler(
+        TerminalChannels.output, _SilentStreamHandler());
+
+    final service = TerminalShellService();
+    await service.start();
+    await service.restart();
+
+    expect(
+      methodCalls.map((c) => c.method),
+      ['start', 'close', 'start'],
+      reason: 'restart must close before it starts again',
+    );
+    expect(service.state.value, TerminalEngineState.connected);
+
+    await service.dispose();
+  });
+
   test('unsupported platforms never touch channels and stay unsupported',
       () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     final methodCalls = <MethodCall>[];
     messenger.setMockMethodCallHandler(TerminalChannels.method, (call) async {
       methodCalls.add(call);
-      return 'started';
+      return {'status': 'started', 'session': 1};
     });
     messenger.setMockStreamHandler(
         TerminalChannels.output, _SilentStreamHandler());
