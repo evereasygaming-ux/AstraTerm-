@@ -9,12 +9,13 @@ build/
 .metadata
 
 # Generated native platform folders are created by scripts/bootstrap_flutter.sh.
-# Commit them later if platform-specific native customization becomes substantial.
-android/
-ios/
-macos/
-windows/
-linux/
+# Patterns are anchored to the repository root so tracked source under
+# native/android/ is NOT ignored.
+/android/
+/ios/
+/macos/
+/windows/
+/linux/
 
 # IDE / OS
 .idea/

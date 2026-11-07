@@ -33,7 +33,8 @@ jobs:
 
       - name: Generate native runner projects
         run: bash scripts/bootstrap_flutter.sh
-\n      - name: Resolve dependencies
+
+      - name: Resolve dependencies
         run: flutter pub get
 
       - name: Analyze and test

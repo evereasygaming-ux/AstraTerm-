@@ -10,11 +10,23 @@
 
 ## Phase 2 — Terminal engine
 - [ ] Typed terminal session API
-- [ ] Android app-sandbox process adapter
-- [ ] Output streaming and input handling
+- [x] Android app-sandbox process adapter (Phase 2.1: persisted `/system/bin/sh`
+      with merged output streaming; no PTY yet)
+- [x] Output streaming and input handling (Phase 2.1: EventChannel-based,
+      asynchronous; character-stream only, no VT processing yet)
 - [ ] Terminal emulator rendering (VT/ANSI)
-- [ ] Resize, lifecycle, cancellation and error states
+- [ ] Resize, lifecycle, cancellation and error states (partial: Phase 2.1
+      covers close/restart and crash-aware teardown only)
 - [ ] Session persistence and tabs
+
+### Phase 2.1 specifics and limitations
+
+Current milestone executes the Android system shell only:
+
+- No PTY (`TERM=dumb`; pipe-based I/O only).
+- No BusyBox, no package manager and no Debian/Ubuntu userspace.
+- No root privileges requested anywhere.
+- Full Linux compatibility is explicitly NOT claimed.
 
 ## Phase 3 — Cross-platform execution
 - [ ] Debian/Linux PTY adapter

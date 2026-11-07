@@ -13,6 +13,25 @@ AstraTerm is a Flutter-based, cross-platform terminal application.
 
 This repository contains the shared Flutter application foundation, an Android-first CI workflow, and a platform bootstrap script. It is **not yet a complete terminal emulator**. The process/PTY engine, terminal rendering, shell adapters, SSH and runtime plugin system are later milestones.
 
+## Phase 2.1 status (terminal engine begins)
+
+Phase 2.1 adds the first execution layer: a Kotlin adapter around the Android
+system shell (`/system/bin/sh`), fully sandboxed in the app and built through
+GitHub Actions (no Termux Android SDK, ADB or NDK needed):
+
+- `lib/services/terminal_shell.dart`: Dart `TerminalShellService` over the
+  `com.astra.term/terminal` MethodChannel and `com.astra.term/terminal_output`
+  EventChannel. Non-Android platforms degrade gracefully with a clear
+  unavailable message.
+- `native/android/`: tracked Kotlin shell-engine sources that the bootstrap
+  script installs into the (git-ignored) generated Android runner.
+- Command input, streamed merged stdout/stderr output, a connection status
+  indicator and a close/restart session control in the Flutter UI.
+
+This milestone is an initial Android sandbox shell **only**. Honest
+limitations: no PTY, no BusyBox, no package manager, no Debian/Ubuntu
+userspace, no root privileges, no full Linux compatibility.
+
 ## Requirements
 
 - Flutter stable SDK (version pinned by the CI workflow)
@@ -31,7 +50,7 @@ flutter test
 flutter run
 ```
 
-The bootstrap script generates Android, iOS, macOS, Windows and Linux runner projects using Flutter, while preserving AstraTerm's Dart source and package metadata. It uses `com.astra.term` as the native application/bundle identifier.
+The bootstrap script generates Android, iOS, macOS, Windows and Linux runner projects using Flutter, while preserving AstraTerm's Dart source and package metadata. It uses `com.astra.term` as the native application/bundle identifier. The generated `MainActivity` is then replaced with AstraTerm's tracked Kotlin MainActivity + shell engine plugin from `native/android/` (idempotent: safe to re-run).
 
 ## Android build
 
