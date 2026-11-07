@@ -1,0 +1,58 @@
+name: Android Release Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_aab:
+        description: Also build an Android App Bundle (AAB)
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  android-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate native runner projects
+        run: bash scripts/bootstrap_flutter.sh
+\n      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Analyze and test
+        run: |
+          flutter analyze
+          flutter test
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Build release AAB
+        if: ${{ inputs.build_aab }}
+        run: flutter build appbundle --release
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: astraterm-android-release
+          path: |
+            build/app/outputs/flutter-apk/app-release.apk
+            build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: warn
